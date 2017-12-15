@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 import numpy as np
 import utils.dgm as dgm
+import utils.bnn as bnn
 
 import tensorflow as tf
 from tensorflow.contrib.tensorboard.plugins import projector
