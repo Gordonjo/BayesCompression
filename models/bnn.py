@@ -14,7 +14,7 @@ from tensorflow.contrib.tensorboard.plugins import projector
 
 class bnn(object):
     
-    def __init__(self, n_x, n_y, n_hid, y_dist, nonlinearity=tf.nn.relu, initVar=-5., batchnorm=False, wSamples=1, ckpt=None):
+    def __init__(self, n_x, n_y, n_hid, y_dist, nonlinearity=tf.nn.relu, initVar=-5., batchnorm=False, wSamples=1, ckpt=None, name='bnn'):
 	self.n_x, self.n_y = n_x, n_y     # data dimensions
 	self.y_dist = y_dist              # regression (gaussian) or classification 'categorical'
 	self.n_hid = n_hid                # network architecture
@@ -22,7 +22,7 @@ class bnn(object):
 	self.nonlinearity = nonlinearity  # network activation function
 	self.bn = batchnorm               # type of batchnorm to use ('None', 'standard', 'bayes') 
 	self.wSamps = wSamples            # number of samples from q(w)
-	self.name = 'bnn'                 # model name
+	self.name = name                  # model name
 	self.ckpt = ckpt                  # preallocated checkpoint directory
 
 	self.build_model()
@@ -32,7 +32,7 @@ class bnn(object):
     def train(self, Data, n_epochs, batchsize, lr, eval_samps=None, binarize=False, logging=False):
         """ Method for training the models """
 	self.train_curve, self.test_curve = [],[]
-        self.data_init(Data, eval_samps, batchsize)
+        self.data_init(Data, eval_samps)
         self.lr = self.set_learning_rate(lr)
         ## define optimizer
         optimizer = tf.train.AdamOptimizer(learning_rate=self.lr)
@@ -85,15 +85,15 @@ class bnn(object):
     def build_model(self):
 	self.create_placeholders()
 	if self.y_dist == 'gaussian':
-	    self.q = initGaussBNN(self.n_x, self.n_hid, self.n_y, 'network', initVar=self.initVar, bn=self.bn)
+	    self.q = initGaussBNN(self.n_x, self.n_hid, self.n_y, self.name, initVar=self.initVar, bn=self.bn)
 	    self.wTilde = sampleGaussBNN(self.q, self.n_hid)
-	    self.y_m, self.y_lv = forwardPassGauss(self.x, self.wTilde, self.n_hid, self.nonlinearity, self.bn, training=True, scope='network', reuse=False)
+	    self.y_m, self.y_lv = forwardPassGauss(self.x, self.wTilde, self.n_hid, self.nonlinearity, self.bn, training=True, scope=self.name, reuse=False)
 	    self.predictions = tf.reduce_mean(self.predict(self.x, 10, training=False)[0], 0)
 	elif self.y_dist == 'categorical':
-	    self.q = initCatBNN(self.n_x, self.n_hid, self.n_y, 'network', initVar=self.initVar, bn=self.bn)
+	    self.q = initCatBNN(self.n_x, self.n_hid, self.n_y, self.name, initVar=self.initVar, bn=self.bn)
 	    self.wTilde = sampleCatBNN(self.q, self.n_hid)
-	    self.y_logits = forwardPassCatLogits(self.x, self.wTilde, self.n_hid, self.nonlinearity, self.bn, training=True, scope='network', reuse=False)
-	    self.predictions = tf.reduce_mean(self.predict(self.x, 10, training=False),0)
+	    self.y_logits = forwardPassCatLogits(self.x, self.wTilde, self.n_hid, self.nonlinearity, self.bn, training=True, scope=self.name, reuse=False)
+	    self.predictions = tf.reduce_mean(self.predict(self.x, 50, training=False),0)
 
     def compute_loss(self, x, y):
 	yr = tf.tile(tf.expand_dims(y,0), [self.wSamps,1,1])
@@ -146,15 +146,15 @@ class bnn(object):
     def predictConditionW(self, x, training=True):
 	""" return E[p(y|x, wTilde)] (assumes wTilde~q(W) has been sampled) """
 	if self.y_dist == 'gaussian':
-	    return forwardPassGauss(x, self.wTilde, self.n_hid, self.nonlinearity, self.bn, training, scope='network')
+	    return forwardPassGauss(x, self.wTilde, self.n_hid, self.nonlinearity, self.bn, training, scope=self.name)
 	elif self.y_dist == 'categorical':
-	    return forwardPassCatLogits(x, self.wTilde, self.n_hid, self.nonlinearity, self.bn, training, scope='network')
+	    return forwardPassCatLogits(x, self.wTilde, self.n_hid, self.nonlinearity, self.bn, training, scope=self.name)
     def binarize(self, x):
 	""" sample values from a bernoulli distribution """
 	return np.random.binomial(1,x)
 
     def predict_new(self, x):
-        saver = tf.train.Saver()
+        saver = tf.train.Saver(var_list=tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=self.name))
         with tf.Session() as session:
             ckpt = tf.train.get_checkpoint_state(self.ckpt_dir)
             saver.restore(session, ckpt.model_checkpoint_path)
@@ -177,7 +177,7 @@ class bnn(object):
 	self.y = tf.placeholder(tf.float32, shape=[None, self.n_y], name='y')
 	self.n = tf.placeholder(tf.float32, shape=[], name='n')
 	
-    def data_init(self, data, eval_samps, bs):
+    def data_init(self, data, eval_samps):
 	self.N = data.N
 	self.ntrain = data.TRAIN_SIZE
 	self.ntest = data.TEST_SIZE
