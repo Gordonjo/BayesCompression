@@ -8,6 +8,7 @@ import tensorflow as tf
 from tensorflow.contrib.layers import xavier_initializer
 from tensorflow.contrib.tensorboard.plugins import projector
 from tensorflow.contrib.distributions import RelaxedOneHotCategorical as Gumbel
+from utils.dgm import *
 import pdb
 
 ############## Bayesian Neural Network modules ############## 
@@ -63,7 +64,7 @@ def sampleBNN(weights, n_hid):
 	wName, bName = 'W'+str(layer), 'b'+str(layer)
 	meanW, meanB = weights['W'+str(layer)+'_mean'], weights['b'+str(layer)+'_mean']
 	logvarW, logvarB = weights['W'+str(layer)+'_logvar'], weights['b'+str(layer)+'_logvar']
-	wTilde[wName], wTilde[bName] = tf.squeeze(sampleNormal(meanW, logvarW)), tf.squeeze(sampleNormal(meanB, logvarB))
+	wTilde[wName], wTilde[bName] = tf.squeeze(sampleNormal(meanW, logvarW,1)), tf.squeeze(sampleNormal(meanB, logvarB,1))
     return wTilde
 
 def sampleCatBNN(weights, n_hid):
@@ -71,7 +72,7 @@ def sampleCatBNN(weights, n_hid):
     wTilde = sampleBNN(weights, n_hid)
     meanW, meanB = weights['Wout_mean'], weights['bout_mean']
     logvarW, logvarB = weights['Wout_logvar'], weights['bout_logvar']
-    wTilde['Wout'], wTilde['bout'] = tf.squeeze(sampleNormal(meanW, logvarW)), tf.squeeze(sampleNormal(meanB, logvarB))
+    wTilde['Wout'], wTilde['bout'] = tf.squeeze(sampleNormal(meanW, logvarW,1)), tf.squeeze(sampleNormal(meanB, logvarB,1))
     return wTilde
 
 def sampleGaussBNN(weights, n_hid):
@@ -79,10 +80,10 @@ def sampleGaussBNN(weights, n_hid):
     wTilde = sampleBNN(weights, n_hid)
     meanW, meanB = weights['Wmean_mean'], weights['bmean_mean']
     logvarW, logvarB = weights['Wmean_logvar'], weights['bmean_logvar']
-    wTilde['Wmean'], wTilde['bmean'] = tf.squeeze(sampleNormal(meanW, logvarW),0), tf.squeeze(sampleNormal(meanB, logvarB),0)
+    wTilde['Wmean'], wTilde['bmean'] = tf.squeeze(sampleNormal(meanW, logvarW,1),0), tf.squeeze(sampleNormal(meanB, logvarB,1),0)
     meanW, meanB = weights['Wvar_mean'], weights['bvar_mean']
     logvarW, logvarB = weights['Wvar_logvar'], weights['bvar_logvar']
-    wTilde['Wvar'], wTilde['bvar'] = tf.squeeze(sampleNormal(meanW, logvarW),0), tf.squeeze(sampleNormal(meanB, logvarB),0)
+    wTilde['Wvar'], wTilde['bvar'] = tf.squeeze(sampleNormal(meanW, logvarW,1),0), tf.squeeze(sampleNormal(meanB, logvarB,1),0)
     return wTilde
 
 def klWBNN(q, W, n_hid, dist):

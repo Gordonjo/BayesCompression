@@ -30,6 +30,10 @@ def standardNormalLogDensity(inputs):
     log_var = tf.log(tf.ones_like(inputs))
     return gaussianLogDensity(inputs, mu, log_var)
 
+def bernoulliLogDensity(inputs, logits):
+    """ Bernoulli log density """
+    return -tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=inputs, logits=logits), axis=-1)
+
 def multinoulliLogDensity(inputs, logits):
     """ Categorical log density """
     return -tf.nn.softmax_cross_entropy_with_logits(labels=inputs, logits=logits)
@@ -39,15 +43,32 @@ def multinoulliUniformLogDensity(inputs):
     logits = tf.ones_like(inputs)
     return -tf.nn.softmax_cross_entropy_with_logits(labels=inputs, logits=logits)
 
-def sampleNormal(mu, logvar, mc_samps=1):
+def gumbelLogDensity(inputs, logits, temp):
+    """ log density of a Gumbel distribution """
+    dist = Gumbel(temperature=temp, logits=logits)
+    return dist.log_prob(inputs)
+
+def sampleNormal(mu, logvar, mc_samps):
     """ return a reparameterized sample from a Gaussian distribution """
     shape = tf.concat([tf.constant([mc_samps]), tf.shape(mu)], axis=-1)
     eps = tf.random_normal(shape, dtype=tf.float32)
     return mu + eps * tf.sqrt(tf.exp(logvar))
 
+def sampleGumbel(logits, temp):
+    """ return a reparameterized sample from a Gaussian distribution """
+    shape = tf.shape(logits)
+    U = tf.random_uniform(shape,minval=0,maxval=1)
+    eps = -tf.log(-tf.log(U + 1e-10) + 1e-10)
+    y = logits + eps
+    return tf.nn.softmax( y / temp)
+
 def standardNormalKL(mu, logvar):
     """ compute the KL divergence between a Gaussian and standard normal """
     return -0.5 * tf.reduce_sum(1 + logvar - mu**2 - tf.exp(logvar), axis=-1)
+
+def gaussianKL(mu1, logvar1, mu2, logvar2):
+    """ compute the KL divergence between two arbitrary Gaussians """
+    return -0.5 * tf.reduce_sum(1 + logvar1 - logvar2 - tf.exp(logvar1)/tf.exp(logvar2) - ((mu1-mu2)**2)/tf.exp(logvar1), axis=-1)
 
 ############## Neural Network modules ##############
 
@@ -78,35 +99,59 @@ def initCatNet(n_in, n_hid, n_out, vname):
     weights['bout'] = tf.get_variable(shape=[n_out], name=vname+'bout', initializer=initNormal)
     return weights
 
-def forwardPass(x, weights, q, n_h, nonlinearity, bn, training, scope, reuse):
+def initGumbelNet(n_in, n_hid, n_out, vname, temp=1.0):
+    """ Initialize the weights of a network parameterizeing a Gumbel-Softmax distribution"""
+    weights = initCatNet(n_in, n_hid, n_out, vname)	
+    return weights
+
+def forwardPass(x, weights, n_h, nonlinearity, bn, training, scope, reuse):
     h = x
     for layer, neurons in enumerate(n_h):
 	weight_name, bias_name = 'W'+str(layer), 'b'+str(layer)
-	weight_mean, bias_mean = 'W'+str(layer)+'_mean', 'b'+str(layer)+'_mean'
-	hq = tf.matmul(h, q[weight_mean]) + q[bias_mean]
 	h = tf.matmul(h, weights[weight_name]) + weights[bias_name]
-	if bn == 'standard':
+	if bn:
 	    name = scope+'_bn'+str(layer)
-	    h = tf.layers.batch_normalization(h, training=training, name=name, reuse=reuse)
-	elif bn == 'bayes':
-	    h = bayesBatchNorm(h, hq, q, layer, training=training)
+	    h = tf.layers.batch_normalization(h, training=training, name=name, reuse=reuse, momentum=0.99)
 	h = nonlinearity(h)
     return h	
 
-def forwardPassGauss(x, weights, q, n_h, nonlinearity, bn, training=True, scope='scope', reuse=True):
+def forwardPassGauss(x, weights, n_h, nonlinearity, bn, training=True, scope='scope', reuse=True):
     """ Forward pass through the network with given weights - Gaussian output """
-    h = forwardPass(x, weights, q, n_h, nonlinearity, bn, training, scope, reuse)
+    h = forwardPass(x, weights, n_h, nonlinearity, bn, training, scope, reuse)
     mean = tf.matmul(h, weights['Wmean']) + weights['bmean']
     logVar = tf.matmul(h, weights['Wvar']) + weights['bvar']
     return mean, logVar
 
-def forwardPassCatLogits(x, weights, q, n_h, nonlinearity, bn, training=True, scope='scope', reuse=True):
+def samplePassGauss(x, weights, n_h, nonlinearity, bn, mc_samps=1, training=True, scope='scope', reuse=True):
+    """ Forward pass through the network with given weights - Gaussian sampling """
+    mean, logVar = forwardPassGauss(x, weights, n_h, nonlinearity, bn, training, scope, reuse)
+    return mean, logVar, sampleNormal(mean, logVar, mc_samps)
+
+def forwardPassCatLogits(x, weights, n_h, nonlinearity, bn, training=True, scope='scope', reuse=True):
     """ Forward pass through the network with weights as a dictionary """
-    h = forwardPass(x, weights, q, n_h, nonlinearity, bn, training, scope, reuse) 
+    h = forwardPass(x, weights, n_h, nonlinearity, bn, training, scope, reuse) 
     logits = tf.matmul(h, weights['Wout']) + weights['bout']
     return logits
 
-def forwardPassCat(x, weights, q, n_h, nonlinearity, bn=False, training=True, scope='scope', reuse=True):
+def forwardPassCat(x, weights, n_h, nonlinearity, bn=False, training=True, scope='scope', reuse=True):
     """ Forward pass through network with given weights - Categorical output """
-    return tf.nn.softmax(forwardPassCatLogits(x, weights, q, n_h, nonlinearity, bn, training, scope, reuse))
+    return tf.nn.softmax(forwardPassCatLogits(x, weights, n_h, nonlinearity, bn, training, scope, reuse))
+
+def forwardPassBernoulli(x, weights, n_h, nonlinearity, bn=False, training=True, scope='scope', reuse=True):
+    """ Forward pass through the network with given weights - Bernoulli output """
+    return tf.nn.sigmoid(forwardPassCatLogits(x, weights, n_h, nonlinearity, bn, training, scope, reuse))
+
+def forwardPassGumbel(x, weights, n_h, nonlinearity, bn=False, training=True, scope='scope', reuse=True):
+    """ Forward pass through the network with given weights - Gumbel logits output """
+    h = forwardPass(x, weights, n_h, nonlinearity, bn, training, scope, reuse) 
+    logits = tf.matmul(h, weights['Wout']) + weights['bout']
+    return logits
+
+def samplePassGumbel(x, weights, n_h, nonlinearity, bn, temp, mc_samps=1, training=True, scope='scope', reuse=True):
+    """ Forward pass through the network with given weights - return a Gumbel-softmax sample """
+    logits = forwardPassCat(x, weights, n_h, nonlinearity, bn, training, scope, reuse)
+    return logits, sampleGumbel(logits, temp)
+
+
+
 
