@@ -6,8 +6,8 @@ import sys, os, pdb
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 import numpy as np
-import utils.dgm as dgm
-import utils.bnn as bnn
+from utils.dgm import *
+from utils.BNN import *
 
 import tensorflow as tf
 from tensorflow.contrib.tensorboard.plugins import projector
@@ -36,12 +36,12 @@ class bnn(object):
         self.lr = self.set_learning_rate(lr)
         ## define optimizer
         optimizer = tf.train.AdamOptimizer(learning_rate=self.lr)
-        gvs = optimizer.compute_gradients(self.loss)
-        capped_gvs = [(tf.clip_by_value(grad, -1., 1.), var) for grad, var in gvs]
-        update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-        with tf.control_dependencies(update_ops):
-            self.optimizer = optimizer.apply_gradients(capped_gvs, global_step=self.global_step)
-        
+        #gvs = optimizer.compute_gradients(self.loss)
+        #capped_gvs = [(tf.clip_by_value(grad, -1., 1.), var) for grad, var in gvs]
+        #update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+        #with tf.control_dependencies(update_ops):
+        #    self.optimizer = optimizer.apply_gradients(capped_gvs, global_step=self.global_step)
+	self.optimizer = optimizer.minimize(self.loss)        
 	self.train_acc, self.test_acc = np.zeros(n_epochs), np.zeros(n_epochs)
         ## initialize session and train
         epoch, step = 0, 0
@@ -56,7 +56,7 @@ class bnn(object):
                 if binarize == True:
                     x = self.binarize(x)
                 ####
-		#fd = {self.x:x, self.y:y}
+		#fd = {self.x:x, self.y:y, self.n:self.ntrain}
                 #pdb.set_trace()
                 ####
                 _, loss_batch = sess.run([self.optimizer, self.loss], {self.x:x, self.y:y, self.n:self.ntrain})
@@ -72,7 +72,7 @@ class bnn(object):
 		        self.test_curve.append(sess.run(self.compute_acc(self.x, self.y), {self.x:Data.data['x_test'], self.y:Data.data['y_test'], self.n:self.ntest}))
 
                     epoch += 1
-                    saver.save(sess, self.ckpt_dir, global_step=step+1)
+                    saver.save(sess, self.ckpt_dir, global_step=epoch)
                     if self.y_dist == 'categorical':
                         self.print_verbose1(epoch, Data, x, y, sess)
                     elif self.y_dist == 'gaussian':
@@ -85,17 +85,15 @@ class bnn(object):
     def build_model(self):
 	self.create_placeholders()
 	if self.y_dist == 'gaussian':
-	    self.q = dgm.initGaussBNN(self.n_x, self.n_hid, self.n_y, 'network', initVar=self.initVar, bn=self.bn)
-	    self.wTilde = dgm.sampleGaussBNN(self.q, self.n_hid)
-	    self.y_m, self.y_lv = dgm.forwardPassGauss(self.x, self.wTilde, self.q, self.n_hid, self.nonlinearity, self.bn, training=True, scope='q', reuse=False)
-	elif self.y_dist == 'categorical':
-	    self.q = dgm.initCatBNN(self.n_x, self.n_hid, self.n_y, 'network', initVar=self.initVar, bn=self.bn)
-	    self.wTilde = dgm.sampleCatBNN(self.q, self.n_hid)
-	    self.y_logits = dgm.forwardPassCatLogits(self.x, self.wTilde, self.q, self.n_hid, self.nonlinearity, self.bn, training=True, scope='q', reuse=False)
-	if self.y_dist=='categorical':
-	    self.predictions = tf.reduce_mean(self.predict(self.x, 10, training=False),0)
-	elif self.y_dist=='gaussian':
+	    self.q = initGaussBNN(self.n_x, self.n_hid, self.n_y, 'network', initVar=self.initVar, bn=self.bn)
+	    self.wTilde = sampleGaussBNN(self.q, self.n_hid)
+	    self.y_m, self.y_lv = forwardPassGauss(self.x, self.wTilde, self.n_hid, self.nonlinearity, self.bn, training=True, scope='network', reuse=False)
 	    self.predictions = tf.reduce_mean(self.predict(self.x, 10, training=False)[0], 0)
+	elif self.y_dist == 'categorical':
+	    self.q = initCatBNN(self.n_x, self.n_hid, self.n_y, 'network', initVar=self.initVar, bn=self.bn)
+	    self.wTilde = sampleCatBNN(self.q, self.n_hid)
+	    self.y_logits = forwardPassCatLogits(self.x, self.wTilde, self.n_hid, self.nonlinearity, self.bn, training=True, scope='network', reuse=False)
+	    self.predictions = tf.reduce_mean(self.predict(self.x, 10, training=False),0)
 
     def compute_loss(self, x, y):
 	yr = tf.tile(tf.expand_dims(y,0), [self.wSamps,1,1])
@@ -103,12 +101,12 @@ class bnn(object):
 	    ym, ylv = self.predict(x, self.wSamps, training=True)
 	    self.l = -tf.reduce_sum(tf.reduce_mean(tf.square(ym-yr),axis=0)) 
 	    nx = tf.cast(tf.shape(x)[0],tf.float32)
-	    self.kl_term = nx*dgm.klWGaussBNN_exact(self.q, self.n_hid)/self.n
+	    self.kl_term = nx*klWGaussBNN_exact(self.q, self.n_hid)/self.n
 	elif self.y_dist == 'categorical':
 	    y_ = self.predict(x, self.wSamps, training=True)
-	    self.l = tf.reduce_sum(tf.reduce_mean(dgm.multinoulliLogDensity(yr,y_), axis=0))
+	    self.l = tf.reduce_sum(tf.reduce_mean(multinoulliLogDensity(yr,y_), axis=0))
 	    nx = tf.cast(tf.shape(x)[0],tf.float32)
-	    self.kl_term = nx*dgm.klWCatBNN_exact(self.q, self.n_hid)/self.n
+	    self.kl_term = nx*klWCatBNN_exact(self.q, self.n_hid)/self.n
 	return -(self.l - self.kl_term) 
  
     def predict(self, x, n_w, training=True):
@@ -141,16 +139,16 @@ class bnn(object):
     def sampleW(self):
 	""" generate a sample of weights """
 	if self.y_dist == 'gaussian':
-	    self.wTilde = dgm.sampleGaussBNN(self.q, self.n_hid)
+	    self.wTilde = sampleGaussBNN(self.q, self.n_hid)
 	elif self.y_dist == 'categorical':
-	    self.wTilde = dgm.sampleCatBNN(self.q, self.n_hid)
+	    self.wTilde = sampleCatBNN(self.q, self.n_hid)
     
     def predictConditionW(self, x, training=True):
 	""" return E[p(y|x, wTilde)] (assumes wTilde~q(W) has been sampled) """
 	if self.y_dist == 'gaussian':
-	    return dgm.forwardPassGauss(x, self.wTilde, self.q, self.n_hid, self.nonlinearity, self.bn, training, scope='q')
+	    return forwardPassGauss(x, self.wTilde, self.n_hid, self.nonlinearity, self.bn, training, scope='network')
 	elif self.y_dist == 'categorical':
-	    return dgm.forwardPassCatLogits(x, self.wTilde, self.q, self.n_hid, self.nonlinearity, self.bn, training, scope='q')
+	    return forwardPassCatLogits(x, self.wTilde, self.n_hid, self.nonlinearity, self.bn, training, scope='network')
     def binarize(self, x):
 	""" sample values from a bernoulli distribution """
 	return np.random.binomial(1,x)
@@ -228,3 +226,12 @@ class bnn(object):
 	kl, ll = sess.run([self.kl_term, self.l], {self.x:x, self.y:y, self.n:self.ntrain})
 	self.train_acc[epoch-1], self.test_acc[epoch-1] = rmse_train, rmse_test
 	print('Epoch {}: Training: {:5.3f}, Testing: {:5.3f}, KL: {:5.3f}, Data: {:5.3f}'.format(epoch, rmse_train, rmse_test, kl, ll))
+
+    def predict_new(self, x):
+        saver = tf.train.Saver()
+        with tf.Session() as session:
+            ckpt = tf.train.get_checkpoint_state(self.ckpt_dir)
+            saver.restore(session, ckpt.model_checkpoint_path)
+            preds = session.run(self.predictions, {self.x:x})
+        return preds
+
